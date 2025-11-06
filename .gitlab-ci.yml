@@ -1,0 +1,23 @@
+deploy:
+  stage: deploy
+  tags:
+    - menumind
+  only:
+    - main
+  script:
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - eval $(ssh-agent -s)
+    - ssh-add ~/.ssh/id_rsa
+    - ssh-keyscan -H $DEPLOY_SERVER_IP >> ~/.ssh/known_hosts
+    - |
+      ssh -o StrictHostKeyChecking=no root@$DEPLOY_SERVER_IP << 'EOF'
+        cd /opt/meal-backend
+        docker compose down
+        rm -rf package-lock.json node_modules
+        git pull origin main
+        npm install
+        docker compose up --build -d
+      EOF
