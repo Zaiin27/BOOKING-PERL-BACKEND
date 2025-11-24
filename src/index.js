@@ -31,7 +31,9 @@ const startServer = async () => {
 
     const io = new SocketIOServer(server, {
       cors: {
-        origin: process.env.CLIENT_ORIGIN || "*",
+        origin: process.env.CLIENT_ORIGIN 
+          ? process.env.CLIENT_ORIGIN.split(',')
+          : ["http://localhost:5181", "https://me.senew-tech.com", "https://booking-perl.vercel.app"],
         methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
         credentials: true,
       },
