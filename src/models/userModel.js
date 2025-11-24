@@ -40,6 +40,53 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Subscription",
     },
+    // Payment type for staff - what payment methods they support
+    paymentType: {
+      type: String,
+      enum: ["online", "cash", "both"],
+      default: "both", // Default to both for existing staff
+    },
+    // Plan features stored directly in user account (for staff) - Future-proof structure
+    planFeatures: {
+      // Property limits
+      maxProperties: { type: Number, default: 1 },
+      maxPhotosPerProperty: { type: Number, default: 3 },
+      // Features
+      features: {
+        basicInfoDisplay: { type: Boolean, default: true },
+        contactForm: { type: Boolean, default: false },
+        searchResults: { type: Boolean, default: true },
+        priorityVisibility: { type: Boolean, default: false },
+        featuredPlacement: { type: Boolean, default: false },
+        homepageFeatured: { type: Boolean, default: false },
+        socialMediaPromotion: { type: Boolean, default: false },
+        emailNotifications: { type: Boolean, default: false },
+        reviewManagement: { type: Boolean, default: false },
+        bookingManagement: { type: Boolean, default: false },
+        discountPromotions: { type: Boolean, default: false },
+        customBranding: { type: Boolean, default: false },
+        apiAccess: { type: Boolean, default: false },
+        teamAccess: { type: Boolean, default: false },
+        dedicatedAccountManager: { type: Boolean, default: false },
+      },
+      // Analytics
+      analytics: {
+        basic: { type: Boolean, default: false },
+        advanced: { type: Boolean, default: false },
+      },
+      // Badges
+      badges: {
+        verified: { type: Boolean, default: false },
+        trustedHost: { type: Boolean, default: false },
+        premium: { type: Boolean, default: false },
+      },
+      // Priority/ranking
+      searchPriority: { type: Number, default: 1 },
+      // Plan metadata
+      planName: { type: String, default: "free" },
+      planDisplayName: { type: String, default: "Free Plan" },
+      planUpdatedAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

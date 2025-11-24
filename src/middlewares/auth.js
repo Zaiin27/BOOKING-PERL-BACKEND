@@ -37,9 +37,13 @@ export const isAuthenticatedUser = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("Please login to again.", 401));
   }
 
+  // Ensure paymentType is included (default to "both" if not set)
+  const paymentType = user.paymentType || "both";
+
   req.user = {
     id: user._id,
     ...user,
+    paymentType, // Explicitly include paymentType
   };
 
   next();

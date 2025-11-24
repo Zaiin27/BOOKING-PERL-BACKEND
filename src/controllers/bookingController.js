@@ -257,6 +257,7 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
     numberOfGuests,
     bookedRooms,
     specialRequests,
+    paymentType = "online", // Default to online payment
   } = req.body;
 
   // Use checkOutDate or checkoutDate (whichever is provided)
@@ -402,6 +403,19 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
     };
   });
 
+  // Add platform fee for payment on arrival (200 PKR)
+  let platformFee = 0;
+  if (paymentType === "on_arrival") {
+    platformFee = 200;
+    totalAmount += platformFee;
+  }
+
+  // Calculate commission based on payment type
+  // Online: 20% commission, On Arrival: 15% commission
+  let commissionPercentage = paymentType === "online" ? 20 : 15;
+  let commissionAmount = (totalAmount * commissionPercentage) / 100;
+  let hotelOwnerAmount = totalAmount - commissionAmount;
+
   // Generate booking ID and reference
   let bookingId = generateBookingId();
   let bookingReference = generateBookingReference();
@@ -413,6 +427,16 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
     bookingId = generateBookingId();
     exists = await Booking.exists({ booking_id: bookingId });
     attempts++;
+  }
+
+  // Determine booking and payment status based on payment type
+  let bookingStatus = "pending";
+  let paymentStatus = "pending";
+  
+  if (paymentType === "on_arrival") {
+    // For payment on arrival, booking is confirmed immediately
+    bookingStatus = "confirmed";
+    paymentStatus = "pending"; // Payment will be collected on arrival
   }
 
   // Create booking
@@ -432,8 +456,13 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
     totalRooms,
     totalAmount,
     specialRequests: specialRequests || "",
-    bookingStatus: "pending",
-    paymentStatus: "pending",
+    bookingStatus,
+    paymentStatus,
+    paymentType,
+    platformFee,
+    commissionAmount,
+    commissionPercentage,
+    hotelOwnerAmount,
   });
 
   // Populate property details

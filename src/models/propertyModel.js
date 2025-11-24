@@ -137,6 +137,12 @@ const propertySchema = new mongoose.Schema(
       trustedHostBadge: { type: Boolean, default: false },
       premiumBadge: { type: Boolean, default: false },
     },
+    // Payment methods supported by this property (inherited from staff)
+    paymentType: {
+      type: String,
+      enum: ["online", "cash", "both"],
+      default: "both",
+    },
   },
   {
     timestamps: true,
@@ -155,6 +161,21 @@ propertySchema.virtual("availableRooms").get(function () {
   if (!this.roomTypes || this.roomTypes.length === 0) return 0;
   return this.roomTypes.reduce((sum, room) => sum + room.available, 0);
 });
+
+// Optimized compound indexes for common query patterns
+propertySchema.index({ status: 1, isFeatured: -1, isPriority: -1, searchPriority: -1, createdAt: -1 });
+propertySchema.index({ status: 1, owner_id: 1 });
+propertySchema.index({ name: 1, address: 1 }); // Optimized for search queries
+propertySchema.index({ createdAt: -1 });
+propertySchema.index({ status: 1, name: 1 }); // For status + name searches
+propertySchema.index({ status: 1, address: 1 }); // For status + address searches
+// Text search index (if needed for full-text search)
+try {
+  propertySchema.index({ name: "text", address: "text", description: "text" });
+} catch (e) {
+  // Index might already exist
+  console.log("Text index already exists or error creating:", e.message);
+}
 
 propertySchema.set("toJSON", {
   virtuals: true,

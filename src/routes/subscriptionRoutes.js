@@ -2,6 +2,7 @@ import express from "express";
 import {
   createSubscription,
   activateSubscription,
+  updateSubscription,
   cancelSubscription,
   upgradeSubscription,
   getAllSubscriptions,
@@ -12,6 +13,7 @@ const router = express.Router();
 
 // User routes
 router.post("/", isAuthenticatedUser, createSubscription);
+router.patch("/:id", isAuthenticatedUser, updateSubscription);
 router.patch("/:id/activate", isAuthenticatedUser, activateSubscription);
 router.patch("/:id/cancel", isAuthenticatedUser, cancelSubscription);
 router.post("/:id/upgrade", isAuthenticatedUser, upgradeSubscription);

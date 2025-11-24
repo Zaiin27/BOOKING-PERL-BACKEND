@@ -10,9 +10,15 @@ const sendToken = (user, statusCode, res) => {
     sameSite: "strict",
   };
 
+  // Ensure paymentType is included in user object
+  const userObject = user.toObject ? user.toObject() : user;
+  if (!userObject.paymentType) {
+    userObject.paymentType = user.paymentType || "both";
+  }
+
   res.status(statusCode).cookie("authToken", token, options).json({
     success: true,
-    user,
+    user: userObject,
     token,
   });
 };

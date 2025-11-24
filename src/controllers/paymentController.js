@@ -135,10 +135,15 @@ export const createBookingPaymentIntent = catchAsyncErrors(async (req, res, next
 
 // Create JazzCash payment
 export const createJazzCashPayment = catchAsyncErrors(async (req, res, next) => {
-  const { amount, currency = 'PKR', booking_reference, booking_id, mobile_number, description } = req.body;
+  const { amount, currency = 'PKR', booking_reference, booking_id, mobile_number, description, subscription_id } = req.body;
 
-  if (!amount || !booking_reference || !mobile_number) {
-    return next(new ErrorHandler("Amount, booking reference, and mobile number are required", 400));
+  if (!amount || !mobile_number) {
+    return next(new ErrorHandler("Amount and mobile number are required", 400));
+  }
+
+  // Either booking_reference or subscription_id must be provided
+  if (!booking_reference && !subscription_id) {
+    return next(new ErrorHandler("Either booking reference or subscription ID is required", 400));
   }
 
   // Validate mobile number format (Pakistani mobile numbers)
@@ -192,14 +197,15 @@ export const createJazzCashPayment = catchAsyncErrors(async (req, res, next) => 
       currency: currency.toUpperCase(),
       method: 'jazzcash',
       status: 'pending',
-      orderId: booking_reference,
+      orderId: booking_reference || subscription_id,
       mobile_number: mobile_number,
       transaction_id: transaction_id,
       metadata: {
         booking_id,
+        subscription_id,
         mobile_number,
         transaction_id,
-        type: 'booking'
+        type: subscription_id ? 'subscription' : 'booking'
       }
     });
 
@@ -235,10 +241,15 @@ export const createJazzCashPayment = catchAsyncErrors(async (req, res, next) => 
 
 // Create EasyPaisa payment
 export const createEasyPaisaPayment = catchAsyncErrors(async (req, res, next) => {
-  const { amount, currency = 'PKR', booking_reference, booking_id, mobile_number, description } = req.body;
+  const { amount, currency = 'PKR', booking_reference, booking_id, mobile_number, description, subscription_id } = req.body;
 
-  if (!amount || !booking_reference || !mobile_number) {
-    return next(new ErrorHandler("Amount, booking reference, and mobile number are required", 400));
+  if (!amount || !mobile_number) {
+    return next(new ErrorHandler("Amount and mobile number are required", 400));
+  }
+
+  // Either booking_reference or subscription_id must be provided
+  if (!booking_reference && !subscription_id) {
+    return next(new ErrorHandler("Either booking reference or subscription ID is required", 400));
   }
 
   // Validate mobile number format (Pakistani mobile numbers)
@@ -272,14 +283,15 @@ export const createEasyPaisaPayment = catchAsyncErrors(async (req, res, next) =>
       currency: currency.toUpperCase(),
       method: 'easypaisa',
       status: 'pending',
-      orderId: booking_reference,
+      orderId: booking_reference || subscription_id,
       mobile_number: mobile_number,
       transaction_id: transaction_id,
       metadata: {
         booking_id,
+        subscription_id,
         mobile_number,
         transaction_id,
-        type: 'booking'
+        type: subscription_id ? 'subscription' : 'booking'
       }
     });
 
@@ -330,15 +342,22 @@ export const verifyPayment = catchAsyncErrors(async (req, res, next) => {
     // In a real implementation, you would call JazzCash/EasyPaisa API to verify payment
     // For demo purposes, we'll simulate different scenarios
     
-    // Simulate payment verification based on time elapsed
+    // Check if payment status is already updated
+    let status = payment.status === 'success' ? 'completed' : 'pending';
+    
+    // Simulate payment verification based on time elapsed (for demo)
+    // In production, this should check actual payment gateway status
     const timeElapsed = Date.now() - payment.createdAt.getTime();
     const minutesElapsed = timeElapsed / (1000 * 60);
 
-    let status = 'pending';
-    
     // Simulate payment completion after 2 minutes (for demo)
-    if (minutesElapsed > 2) {
+    // IMPORTANT: In production, only activate when payment gateway confirms payment
+    if (minutesElapsed > 2 && payment.status === 'pending') {
       status = 'completed';
+      
+      // Update payment status to success
+      payment.status = 'success';
+      await payment.save();
       
       // Update booking status if payment is completed
       if (payment.metadata?.booking_id) {
@@ -378,17 +397,124 @@ export const verifyPayment = catchAsyncErrors(async (req, res, next) => {
           }
         }
       }
+
+      // Activate subscription if payment is for subscription AND payment is confirmed
+      if (payment.metadata?.subscription_id && status === 'completed') {
+        try {
+          const Subscription = (await import("../models/subscriptionModel.js")).default;
+          const subscription = await Subscription.findById(payment.metadata.subscription_id).populate("plan_id");
+          
+          // Only activate if subscription is pending and payment is confirmed
+          if (subscription && subscription.status === "pending" && payment.status === 'success') {
+            // Cancel existing active subscriptions
+            await Subscription.updateMany(
+              {
+                user_id: subscription.user_id,
+                status: "active",
+                _id: { $ne: subscription._id },
+              },
+              { status: "cancelled", cancelledAt: new Date() }
+            );
+
+            // Activate subscription
+            subscription.status = "active";
+            subscription.paymentStatus = "completed";
+            subscription.transactionId = transactionId;
+            await subscription.save();
+
+            // Get plan details
+            const plan = subscription.plan_id;
+            if (plan) {
+              // Update user with plan features (for staff - override existing features)
+              const User = (await import("../models/userModel.js")).default;
+              const user = await User.findById(subscription.user_id);
+              
+              if (user) {
+                user.currentPlan = subscription.planName;
+                user.subscriptionId = subscription._id;
+                
+                // Override plan features in user account (Future-proof structure)
+                user.planFeatures = {
+                  maxProperties: plan.maxProperties || 1,
+                  maxPhotosPerProperty: plan.maxPhotosPerProperty || 3,
+                  features: {
+                    basicInfoDisplay: plan.features?.basicInfoDisplay ?? true,
+                    contactForm: plan.features?.contactForm ?? false,
+                    searchResults: plan.features?.searchResults ?? true,
+                    priorityVisibility: plan.features?.priorityVisibility ?? false,
+                    featuredPlacement: plan.features?.featuredPlacement ?? false,
+                    homepageFeatured: plan.features?.homepageFeatured ?? false,
+                    socialMediaPromotion: plan.features?.socialMediaPromotion ?? false,
+                    emailNotifications: plan.features?.emailNotifications ?? false,
+                    reviewManagement: plan.features?.reviewManagement ?? false,
+                    bookingManagement: plan.features?.bookingManagement ?? false,
+                    discountPromotions: plan.features?.discountPromotions ?? false,
+                    customBranding: plan.features?.customBranding ?? false,
+                    apiAccess: plan.features?.apiAccess ?? false,
+                    teamAccess: plan.features?.teamAccess ?? false,
+                    dedicatedAccountManager: plan.features?.dedicatedAccountManager ?? false,
+                  },
+                  analytics: {
+                    basic: plan.analytics?.basic ?? false,
+                    advanced: plan.analytics?.advanced ?? false,
+                  },
+                  badges: {
+                    verified: plan.badges?.verified ?? false,
+                    trustedHost: plan.badges?.trustedHost ?? false,
+                    premium: plan.badges?.premium ?? false,
+                  },
+                  searchPriority: plan.searchPriority || 1,
+                  planName: plan.name,
+                  planDisplayName: plan.displayName,
+                  planUpdatedAt: new Date(),
+                };
+                
+                await user.save();
+              }
+
+              // Apply plan features to user's properties
+              const Property = (await import("../models/propertyModel.js")).default;
+              const properties = await Property.find({ owner_id: subscription.user_id });
+
+              for (const property of properties) {
+                // Apply badges
+                if (plan.badges) {
+                  property.planFeatures = {
+                    verifiedBadge: plan.badges.verified || false,
+                    trustedHostBadge: plan.badges.trustedHost || false,
+                    premiumBadge: plan.badges.premium || false,
+                  };
+                }
+
+                // Apply priority/featured
+                property.isPriority = plan.features?.priorityVisibility || false;
+                property.isFeatured = plan.features?.featuredPlacement || false;
+                property.searchPriority = plan.searchPriority || 1;
+
+                await property.save();
+              }
+            }
+
+            console.log("Subscription activated successfully:", subscription._id);
+          }
+        } catch (error) {
+          console.error("Error activating subscription after payment:", error);
+        }
+      }
     }
 
+    // Return updated payment status
     res.status(200).json({
       success: true,
       data: {
         transaction_id: transactionId,
-        status: status,
+        status: payment.status === 'success' ? 'completed' : status,
         amount: payment.amount / 100, // Convert back from paisa
         currency: payment.currency,
         method: payment.method,
-        created_at: payment.createdAt
+        created_at: payment.createdAt,
+        // Include subscription activation status if applicable
+        subscription_activated: payment.metadata?.subscription_id && payment.status === 'success' ? true : false
       }
     });
 

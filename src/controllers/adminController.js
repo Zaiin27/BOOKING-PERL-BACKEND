@@ -84,7 +84,7 @@ export const listUsers = catchAsyncErrors(async (req, res, next) => {
   const skip = (Number(page) - 1) * Number(limit);
   const [rows, total] = await Promise.all([
     User.find(filter)
-      .select("name email role isActive isVerified createdAt")
+      .select("name email role isActive isVerified createdAt paymentType")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
@@ -116,7 +116,7 @@ export const listStaffs = catchAsyncErrors(async (req, res, next) => {
   const skip = (Number(page) - 1) * Number(limit);
   const [rows, total] = await Promise.all([
     User.find(filter)
-      .select("name email role isActive isVerified createdAt")
+      .select("name email role isActive isVerified createdAt paymentType")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
@@ -447,7 +447,7 @@ export const getAllUsers = catchAsyncErrors(async (req, res, next) => {
   const skip = (Number(page) - 1) * Number(limit);
   const [rows, total] = await Promise.all([
     User.find(filter)
-      .select("email role isActive isVerified createdAt")
+      .select("name email role isActive isVerified createdAt paymentType")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
@@ -512,7 +512,7 @@ export const deactivateUser = catchAsyncErrors(async (req, res, next) => {
 
 // Create new user (admin only)
 export const createUser = catchAsyncErrors(async (req, res, next) => {
-  const { name, email, role = "user", password } = req.body || {};
+  const { name, email, role = "user", password, paymentType } = req.body || {};
 
   if (!email) {
     return next(new ErrorHandler("Email is required", 400));
@@ -529,19 +529,33 @@ export const createUser = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
+  // Validate paymentType if provided
+  if (paymentType && !["online", "cash", "both"].includes(paymentType)) {
+    return next(
+      new ErrorHandler("Invalid paymentType. Must be online, cash, or both", 400)
+    );
+  }
+
   // Check if user already exists
   const existingUser = await User.findOne({ email });
   if (existingUser) {
     return next(new ErrorHandler("User with this email already exists", 400));
   }
 
-  const user = new User({
+  const userData = {
     name,
     email,
     password,
     role,
     isVerified: true, // Auto-verify admin created users
-  });
+  };
+
+  // Add paymentType if provided (mainly for staff)
+  if (paymentType) {
+    userData.paymentType = paymentType;
+  }
+
+  const user = new User(userData);
 
   const saved = await user.save();
 
@@ -585,7 +599,7 @@ export const createUser = catchAsyncErrors(async (req, res, next) => {
 
 // Create new staff member (admin only) - kept for backward compatibility
 export const createStaff = catchAsyncErrors(async (req, res, next) => {
-  const { email, password, confirmPassword } = req.body || {};
+  const { email, password, confirmPassword, name, paymentType } = req.body || {};
 
   if (!email || !password || !confirmPassword) {
     return next(
@@ -599,18 +613,35 @@ export const createStaff = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
+  // Validate paymentType if provided
+  if (paymentType && !["online", "cash", "both"].includes(paymentType)) {
+    return next(
+      new ErrorHandler("Invalid paymentType. Must be online, cash, or both", 400)
+    );
+  }
+
   // Check if user already exists
   const existingUser = await User.findOne({ email });
   if (existingUser) {
     return next(new ErrorHandler("User with this email already exists", 400));
   }
 
-  const user = new User({
+  const userData = {
     email,
     password,
     role: "staff",
     isVerified: true, // Auto-verify staff members
-  });
+  };
+
+  // Add name if provided
+  if (name) {
+    userData.name = name;
+  }
+
+  // Add paymentType if provided (default to "both" for staff)
+  userData.paymentType = paymentType || "both";
+
+  const user = new User(userData);
 
   const saved = await user.save();
 
@@ -619,8 +650,10 @@ export const createStaff = catchAsyncErrors(async (req, res, next) => {
     message: "Staff member created successfully",
     data: {
       id: saved._id,
+      name: saved.name,
       email: saved.email,
       role: saved.role,
+      paymentType: saved.paymentType,
       isActive: saved.isActive,
       isVerified: saved.isVerified,
       createdAt: saved.createdAt,
@@ -631,7 +664,7 @@ export const createStaff = catchAsyncErrors(async (req, res, next) => {
 // Update user details (admin only)
 export const updateUser = catchAsyncErrors(async (req, res, next) => {
   const { userId } = req.params;
-  const { name, email, role, isActive } = req.body || {};
+  const { name, email, role, isActive, paymentType } = req.body || {};
 
   const user = await User.findById(userId);
   if (!user) return next(new ErrorHandler("User not found", 404));
@@ -662,6 +695,23 @@ export const updateUser = catchAsyncErrors(async (req, res, next) => {
   // Update active status if provided
   if (typeof isActive === "boolean") {
     user.isActive = isActive;
+  }
+
+  // Update paymentType if provided (mainly for staff)
+  if (paymentType && ["online", "cash", "both"].includes(paymentType)) {
+    user.paymentType = paymentType;
+    
+    // If staff paymentType is updated, update all their properties
+    if (user.role === "staff") {
+      await Property.updateMany(
+        { owner_id: user._id },
+        { paymentType: paymentType }
+      );
+    }
+  } else if (paymentType && !["online", "cash", "both"].includes(paymentType)) {
+    return next(
+      new ErrorHandler("Invalid paymentType. Must be online, cash, or both", 400)
+    );
   }
 
   await user.save();
@@ -836,6 +886,7 @@ export const getUserById = catchAsyncErrors(async (req, res, next) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      paymentType: user.paymentType,
       isActive: user.isActive,
       isVerified: user.isVerified,
       createdAt: user.createdAt,
@@ -863,6 +914,7 @@ export const getStaffById = catchAsyncErrors(async (req, res, next) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      paymentType: user.paymentType,
       isActive: user.isActive,
       isVerified: user.isVerified,
       createdAt: user.createdAt,
@@ -1259,7 +1311,10 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
     totalRevenue,
     pendingBookings,
     confirmedBookings,
-    activeGuests,
+    totalCommissionOnline,
+    totalCommissionOnArrival,
+    todayCommissionOnline,
+    todayCommissionOnArrival,
   ] = await Promise.all([
     // Total properties
     req.user.role === "admin" 
@@ -1275,9 +1330,19 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
       createdAt: { $gte: today, $lt: tomorrow },
     }),
     
-    // Total revenue from paid bookings
+    // Total revenue from paid online bookings + confirmed on-arrival bookings
+    // Online: only count if paymentStatus is "paid"
+    // On-arrival: count if bookingStatus is "confirmed" (payment will be collected on arrival)
     Booking.aggregate([
-      { $match: { ...filter, paymentStatus: "paid" } },
+      {
+        $match: {
+          ...filter,
+          $or: [
+            { paymentStatus: "paid", paymentType: "online" },
+            { bookingStatus: "confirmed", paymentType: "on_arrival" },
+          ],
+        },
+      },
       { $group: { _id: null, total: { $sum: "$totalAmount" } } },
     ]),
     
@@ -1287,14 +1352,57 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
     // Confirmed bookings
     Booking.countDocuments({ ...filter, bookingStatus: "confirmed" }),
     
-    // Active guests (checked in today or check-in date is today)
-    Booking.countDocuments({
-      ...filter,
-      bookingStatus: "confirmed",
-      checkInDate: { $lte: new Date() },
-      checkOutDate: { $gte: today },
-    }),
+    // Total commission from paid online bookings
+    Booking.aggregate([
+      { $match: { ...filter, paymentStatus: "paid", paymentType: "online" } },
+      { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
+    ]),
+    
+    // Total commission from confirmed on_arrival bookings (payment will be collected on arrival)
+    Booking.aggregate([
+      { $match: { ...filter, bookingStatus: "confirmed", paymentType: "on_arrival" } },
+      { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
+    ]),
+    
+    // Today's commission from paid online bookings
+    Booking.aggregate([
+      { 
+        $match: { 
+          ...filter, 
+          paymentStatus: "paid",
+          paymentType: "online",
+          createdAt: { $gte: today, $lt: tomorrow }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
+    ]),
+    
+    // Today's commission from confirmed on_arrival bookings
+    Booking.aggregate([
+      { 
+        $match: { 
+          ...filter, 
+          bookingStatus: "confirmed",
+          paymentType: "on_arrival",
+          createdAt: { $gte: today, $lt: tomorrow }
+        } 
+      },
+      { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
+    ]),
   ]);
+
+  // Get currency from bookings (default to PKR if most bookings are PKR)
+  const currencyData = await Booking.aggregate([
+    { $match: filter },
+    { $group: { _id: "$currency", count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 1 }
+  ]);
+  
+  const detectedCurrency = currencyData[0]?._id || "PKR";
+
+  // Calculate total commission (online + on-arrival combined)
+  const totalCommission = (totalCommissionOnline[0]?.total || 0) + (totalCommissionOnArrival[0]?.total || 0);
 
   res.json({
     success: true,
@@ -1306,8 +1414,12 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
       totalRevenue: totalRevenue[0]?.total || 0,
       pendingBookings,
       confirmedBookings,
-      activeGuests,
-      currency: "USD",
+      totalCommissionOnline: totalCommissionOnline[0]?.total || 0,
+      totalCommissionOnArrival: totalCommissionOnArrival[0]?.total || 0,
+      totalCommission, // Combined total commission
+      todayCommissionOnline: todayCommissionOnline[0]?.total || 0,
+      todayCommissionOnArrival: todayCommissionOnArrival[0]?.total || 0,
+      currency: detectedCurrency,
     },
   });
 });

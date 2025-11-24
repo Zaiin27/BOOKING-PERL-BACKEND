@@ -7,7 +7,12 @@ import crypto from "crypto";
 
 export const checkAuth = catchAsyncErrors(async (req, res, next) => {
   if (req.user) {
-    res.json(req.user);
+    // Ensure paymentType is included in response
+    const userResponse = {
+      ...req.user,
+      paymentType: req.user.paymentType || "both",
+    };
+    res.json(userResponse);
   } else {
     res.sendStatus(401);
   }

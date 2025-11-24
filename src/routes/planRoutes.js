@@ -14,11 +14,13 @@ const router = express.Router();
 
 // Public routes
 router.get("/", getAllPlans);
-router.get("/:id", getPlanById);
 
-// Authenticated routes
+// Authenticated routes - MUST be before /:id route
 router.get("/my-subscription", isAuthenticatedUser, getMySubscription);
 router.get("/limits", isAuthenticatedUser, getMyLimits);
+
+// Public routes with parameters - MUST be after specific routes
+router.get("/:id", getPlanById);
 
 // Super Admin only routes
 router.post("/", isAuthenticatedUser, authorizeRole("superadmin"), createPlan);

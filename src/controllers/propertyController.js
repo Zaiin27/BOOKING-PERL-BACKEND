@@ -3,6 +3,7 @@ import Property from "../models/propertyModel.js";
 import Booking from "../models/bookingModel.js";
 import Plan from "../models/planModel.js";
 import Subscription from "../models/subscriptionModel.js";
+import User from "../models/userModel.js";
 import ErrorHandler from "../utils/errorHandler.js";
 import mongoose from "mongoose";
 
@@ -257,6 +258,15 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
+  // Get paymentType from staff owner if property is owned by staff
+  let propertyPaymentType = "both"; // Default
+  if (ownerId) {
+    const owner = await User.findById(ownerId).select("paymentType role");
+    if (owner && owner.role === "staff" && owner.paymentType) {
+      propertyPaymentType = owner.paymentType;
+    }
+  }
+
   const property = await Property.create({
     property_id: propertyId,
     name,
@@ -277,6 +287,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
     isPriority,
     isFeatured,
     searchPriority,
+    paymentType: propertyPaymentType, // Inherit from staff owner
   });
 
   console.log("Property created successfully:", property);
@@ -288,7 +299,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   });
 });
 
-// @desc    Get all properties
+// @desc    Get all properties (Optimized)
 // @route   GET /api/v1/properties
 // @access  Public
 export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
@@ -299,52 +310,54 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
   // Role-based filtering
   if (req.user) {
     if (req.user.role === "staff") {
-      // Staff can only see their own properties
       filter.owner_id = req.user.id;
     }
-    // Admin can see all properties
   }
 
-  // Owner ID filter (for admin to filter by specific staff)
+  // Owner ID filter
   if (owner_id) {
     filter.owner_id = owner_id;
   }
 
-  // Status filter
+  // Status filter - optimized with index
   if (status) {
     filter.status = status;
   } else {
-    // By default, show only active properties for public
     if (!req.user || req.user.role === "user") {
       filter.status = "active";
     }
   }
 
-  // Search filter
+  // Optimized search - use text index if available, otherwise regex with limit
   if (search && search.trim()) {
-    const searchRegex = new RegExp(search.trim(), "i");
-    filter.$or = [
-      { name: searchRegex },
-      { address: searchRegex },
-      { description: searchRegex },
-    ];
+    const searchTerm = search.trim();
+    // Use text search if index exists, otherwise use optimized regex
+    if (searchTerm.length > 2) {
+      filter.$or = [
+        { name: { $regex: searchTerm, $options: "i" } },
+        { address: { $regex: searchTerm, $options: "i" } },
+      ];
+      // Only search description if search term is longer
+      if (searchTerm.length > 5) {
+        filter.$or.push({ description: { $regex: searchTerm, $options: "i" } });
+      }
+    }
   }
 
   const skip = (Number(page) - 1) * Number(limit);
+  const limitNum = Math.min(Number(limit), 50); // Max 50 items per page
   
-  // Default sort: Priority first (featured > priority > regular), then by searchPriority, then by sortBy
+  // Optimized sort options
   let sortOptions = {};
   if (sortBy === "createdAt" && !req.query.sortBy) {
-    // Default sort by priority and search priority
     sortOptions = {
-      isFeatured: -1, // Featured first
-      isPriority: -1, // Priority second
-      searchPriority: -1, // Higher priority first
-      createdAt: -1, // Newest first
+      isFeatured: -1,
+      isPriority: -1,
+      searchPriority: -1,
+      createdAt: -1,
     };
   } else {
     sortOptions[sortBy] = order === "asc" ? 1 : -1;
-    // Always include priority sorting even with custom sort
     if (sortBy !== "isFeatured" && sortBy !== "isPriority" && sortBy !== "searchPriority") {
       sortOptions = {
         isFeatured: -1,
@@ -355,28 +368,111 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  const [properties, total] = await Promise.all([
-    Property.find(filter, null, { maxTimeMS: 10000 })
-      .populate("owner_id", "name email role")
-      .select("-__v") // Exclude version field
-      .sort(sortOptions)
-      .skip(skip)
-      .limit(Number(limit))
-      .lean(),
-    Property.countDocuments(filter).maxTimeMS(5000), // 5 second count timeout
-  ]);
+  // Optimized field selection - exclude heavy fields
+  const selectFields = "name address description roomTypes photos status currency isFeatured isPriority searchPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
+  
+  // Try aggregation pipeline first, fallback to find() if it fails
+  let properties, total;
+  
+  try {
+    // Use aggregation pipeline for better performance
+    const pipeline = [
+      { $match: filter },
+      { $sort: sortOptions },
+      { $skip: skip },
+      { $limit: limitNum },
+      {
+        $project: {
+          name: 1,
+          address: 1,
+          description: 1,
+          roomTypes: 1,
+          photos: { $slice: ["$photos", 1] }, // Only first photo for list view
+          status: 1,
+          currency: 1,
+          isFeatured: 1,
+          isPriority: 1,
+          searchPriority: 1,
+          owner_id: 1,
+          createdAt: 1,
+          contactEmail: 1,
+          amenities: 1,
+          checkInTime: 1,
+          checkOutTime: 1,
+          // Calculate available rooms in projection
+          availableRooms: {
+            $reduce: {
+              input: { $ifNull: ["$roomTypes", []] },
+              initialValue: 0,
+              in: { $add: ["$$value", { $ifNull: ["$$this.available", 0] }] }
+            }
+          }
+        }
+      },
+      // Lightweight populate using lookup
+      {
+        $lookup: {
+          from: "users",
+          localField: "owner_id",
+          foreignField: "_id",
+          as: "owner",
+          pipeline: [
+            { $project: { name: 1, email: 1, role: 1 } }
+          ]
+        }
+      },
+      {
+        $unwind: {
+          path: "$owner",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $addFields: {
+          owner_id: "$owner"
+        }
+      },
+      {
+        $project: {
+          owner: 0
+        }
+      }
+    ];
 
-  // Calculate available rooms for each property
-  const propertiesWithAvailability = properties.map(property => {
-    const availableRooms = property.roomTypes.reduce((total, room) => {
-      return total + (room.available || 0);
-    }, 0);
+    // Parallel execution for count and data
+    [properties, total] = await Promise.all([
+      Property.aggregate(pipeline).maxTimeMS(5000), // 5 second timeout
+      Property.countDocuments(filter).maxTimeMS(2000), // 2 second count timeout
+    ]);
+  } catch (aggregationError) {
+    console.error("Aggregation pipeline error, falling back to find():", aggregationError);
     
-    return {
-      ...property,
-      availableRooms
-    };
-  });
+    // Fallback to traditional find() method
+    const selectFields = "name address description roomTypes photos status currency isFeatured isPriority searchPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
+    
+    [properties, total] = await Promise.all([
+      Property.find(filter)
+        .select(selectFields)
+        .populate("owner_id", "name email role")
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Property.countDocuments(filter).maxTimeMS(2000),
+    ]);
+
+    // Calculate available rooms for each property
+    properties = properties.map(property => {
+      const availableRooms = property.roomTypes?.reduce((total, room) => {
+        return total + (room.available || 0);
+      }, 0) || 0;
+      
+      return {
+        ...property,
+        availableRooms
+      };
+    });
+  }
 
   res.json({
     success: true,
@@ -384,9 +480,9 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
     data: {
       total,
       page: Number(page),
-      limit: Number(limit),
-      pages: Math.ceil(total / Number(limit)),
-      properties: propertiesWithAvailability,
+      limit: limitNum,
+      pages: Math.ceil(total / limitNum),
+      properties,
     },
   });
 });

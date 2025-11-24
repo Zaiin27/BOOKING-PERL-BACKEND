@@ -17,6 +17,7 @@ import chatRoutes from "./routes/chatRoutes.js";
 import siteSettingRoutes from "./routes/siteSettingRoutes.js";
 import planRoutes from "./routes/planRoutes.js";
 import subscriptionRoutes from "./routes/subscriptionRoutes.js";
+import bannerAdRoutes from "./routes/bannerAdRoutes.js";
 import {
   stripeWebhook,
   stripeWebhookMiddleware,
@@ -69,6 +70,7 @@ app.use(`${BASE_ROUTE}/payments`, paymentRoutes);
 app.use(`${BASE_ROUTE}/chat`, chatRoutes);
 app.use(`${BASE_ROUTE}/plans`, planRoutes);
 app.use(`${BASE_ROUTE}/subscriptions`, subscriptionRoutes);
+app.use(`${BASE_ROUTE}/banner-ads`, bannerAdRoutes);
 
 app.use(errorMiddleware);
 

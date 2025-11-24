@@ -156,6 +156,33 @@ const bookingSchema = new mongoose.Schema(
     paymentTransactionId: {
       type: String,
     },
+    paymentType: {
+      type: String,
+      enum: ["online", "on_arrival"],
+      default: "online",
+    },
+    platformFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // Commission Details
+    commissionAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    commissionPercentage: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+    },
+    hotelOwnerAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,

@@ -50,11 +50,50 @@ export const createSubscription = catchAsyncErrors(async (req, res, next) => {
       ...(customDetails && { customDetails }),
     });
 
-    // Update user
-    await User.findByIdAndUpdate(userId, {
-      currentPlan: plan.name,
-      subscriptionId: freeSubscription._id,
-    });
+    // Update user with plan features
+    const user = await User.findById(userId);
+    if (user) {
+      user.currentPlan = plan.name;
+      user.subscriptionId = freeSubscription._id;
+      
+      // Override plan features in user account
+      user.planFeatures = {
+        maxProperties: plan.maxProperties || 1,
+        maxPhotosPerProperty: plan.maxPhotosPerProperty || 3,
+        features: {
+          basicInfoDisplay: plan.features?.basicInfoDisplay ?? true,
+          contactForm: plan.features?.contactForm ?? false,
+          searchResults: plan.features?.searchResults ?? true,
+          priorityVisibility: plan.features?.priorityVisibility ?? false,
+          featuredPlacement: plan.features?.featuredPlacement ?? false,
+          homepageFeatured: plan.features?.homepageFeatured ?? false,
+          socialMediaPromotion: plan.features?.socialMediaPromotion ?? false,
+          emailNotifications: plan.features?.emailNotifications ?? false,
+          reviewManagement: plan.features?.reviewManagement ?? false,
+          bookingManagement: plan.features?.bookingManagement ?? false,
+          discountPromotions: plan.features?.discountPromotions ?? false,
+          customBranding: plan.features?.customBranding ?? false,
+          apiAccess: plan.features?.apiAccess ?? false,
+          teamAccess: plan.features?.teamAccess ?? false,
+          dedicatedAccountManager: plan.features?.dedicatedAccountManager ?? false,
+        },
+        analytics: {
+          basic: plan.analytics?.basic ?? false,
+          advanced: plan.analytics?.advanced ?? false,
+        },
+        badges: {
+          verified: plan.badges?.verified ?? false,
+          trustedHost: plan.badges?.trustedHost ?? false,
+          premium: plan.badges?.premium ?? false,
+        },
+        searchPriority: plan.searchPriority || 1,
+        planName: plan.name,
+        planDisplayName: plan.displayName,
+        planUpdatedAt: new Date(),
+      };
+      
+      await user.save();
+    }
 
     return res.status(201).json({
       success: true,
@@ -70,12 +109,26 @@ export const createSubscription = catchAsyncErrors(async (req, res, next) => {
   });
 
   if (existingSubscription && existingSubscription.isActive()) {
-    return next(
-      new ErrorHandler(
-        "You already have an active subscription. Please upgrade or cancel existing subscription first.",
-        400
-      )
-    );
+    // Check if current subscription period has ended
+    const now = new Date();
+    const subscriptionEndDate = new Date(existingSubscription.endDate);
+    
+    // If subscription period hasn't ended, don't allow new subscription
+    if (subscriptionEndDate > now) {
+      const daysRemaining = Math.ceil((subscriptionEndDate - now) / (1000 * 60 * 60 * 24));
+      return next(
+        new ErrorHandler(
+          `You already have an active subscription. Your current plan expires in ${daysRemaining} day(s). Please wait until the subscription period ends or cancel your current subscription first.`,
+          400
+        )
+      );
+    }
+    
+    // If subscription period has ended but status is still active, cancel it first
+    if (subscriptionEndDate <= now) {
+      existingSubscription.status = "expired";
+      await existingSubscription.save();
+    }
   }
 
   // Calculate end date based on duration
@@ -148,20 +201,94 @@ export const activateSubscription = catchAsyncErrors(async (req, res, next) => {
   }
   await subscription.save();
 
-  // Update user
+  // Get plan details
+  const plan = subscription.plan_id;
+  if (!plan) {
+    return next(new ErrorHandler("Plan not found", 404));
+  }
+
+  // Update user with plan features (for staff - override existing features)
   const user = await User.findById(subscription.user_id);
   if (user) {
     user.currentPlan = subscription.planName;
     user.subscriptionId = subscription._id;
+    
+    // Override plan features in user account (Future-proof structure)
+    user.planFeatures = {
+      maxProperties: plan.maxProperties || 1,
+      maxPhotosPerProperty: plan.maxPhotosPerProperty || 3,
+      features: {
+        basicInfoDisplay: plan.features?.basicInfoDisplay ?? true,
+        contactForm: plan.features?.contactForm ?? false,
+        searchResults: plan.features?.searchResults ?? true,
+        priorityVisibility: plan.features?.priorityVisibility ?? false,
+        featuredPlacement: plan.features?.featuredPlacement ?? false,
+        homepageFeatured: plan.features?.homepageFeatured ?? false,
+        socialMediaPromotion: plan.features?.socialMediaPromotion ?? false,
+        emailNotifications: plan.features?.emailNotifications ?? false,
+        reviewManagement: plan.features?.reviewManagement ?? false,
+        bookingManagement: plan.features?.bookingManagement ?? false,
+        discountPromotions: plan.features?.discountPromotions ?? false,
+        customBranding: plan.features?.customBranding ?? false,
+        apiAccess: plan.features?.apiAccess ?? false,
+        teamAccess: plan.features?.teamAccess ?? false,
+        dedicatedAccountManager: plan.features?.dedicatedAccountManager ?? false,
+      },
+      analytics: {
+        basic: plan.analytics?.basic ?? false,
+        advanced: plan.analytics?.advanced ?? false,
+      },
+      badges: {
+        verified: plan.badges?.verified ?? false,
+        trustedHost: plan.badges?.trustedHost ?? false,
+        premium: plan.badges?.premium ?? false,
+      },
+      searchPriority: plan.searchPriority || 1,
+      planName: plan.name,
+      planDisplayName: plan.displayName,
+      planUpdatedAt: new Date(),
+    };
+    
     await user.save();
   }
 
   // Apply plan features to user's properties
-  await applyPlanFeaturesToProperties(subscription.user_id, subscription.plan_id);
+  await applyPlanFeaturesToProperties(subscription.user_id, plan);
 
   res.json({
     success: true,
-    message: "Subscription activated successfully",
+    message: "Subscription activated successfully. Plan features have been applied to your account.",
+    data: subscription,
+  });
+});
+
+// @desc    Update subscription
+// @route   PATCH /api/v1/subscriptions/:id
+// @access  Authenticated
+export const updateSubscription = catchAsyncErrors(async (req, res, next) => {
+  const { id } = req.params;
+  const { transactionId } = req.body;
+  const userId = req.user.id;
+
+  const subscription = await Subscription.findById(id);
+  if (!subscription) {
+    return next(new ErrorHandler("Subscription not found", 404));
+  }
+
+  // Check permissions
+  if (String(subscription.user_id) !== String(userId)) {
+    return next(new ErrorHandler("Unauthorized", 403));
+  }
+
+  // Update transaction ID if provided
+  if (transactionId) {
+    subscription.transactionId = transactionId;
+    await subscription.save();
+  }
+
+  res.json({
+    success: true,
+    message: "Subscription updated successfully",
     data: subscription,
   });
 });
