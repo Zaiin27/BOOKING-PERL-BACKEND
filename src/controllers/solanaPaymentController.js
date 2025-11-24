@@ -12,7 +12,7 @@ import bs58 from "bs58";
 dotenv.config();
 
 // Solana connection from .env
-const connection = new Connection(process.env.SOLANA_RPC, "confirmed");
+const connection = new Connection(process.env.SOLANA_RPC || "https://api.devnet.solana.com", "confirmed");
 const RECIPIENT_PUBLIC_KEY = process.env.RECIPIENT_PUBLIC_KEY;
 
 // Helper: sleep
