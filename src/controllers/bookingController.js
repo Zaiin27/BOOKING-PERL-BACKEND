@@ -273,15 +273,34 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("Guest name must be between 2 and 100 characters", 400));
   }
 
-  // Validate guest email
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(guestEmail) || guestEmail.length > 100) {
-    return next(new ErrorHandler("Please provide a valid email address", 400));
+  // Validate guest email (optional)
+  if (guestEmail) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(guestEmail) || guestEmail.length > 100) {
+      return next(new ErrorHandler("Please provide a valid email address", 400));
+    }
   }
 
-  // Validate guest phone
-  if (!/^[\+]?[1-9][\d]{0,15}$/.test(guestPhone) || guestPhone.length < 10 || guestPhone.length > 15) {
-    return next(new ErrorHandler("Please provide a valid phone number (10-15 digits)", 400));
+  // Validate guest phone - Support Pakistani formats: 03084143960 (11 digits) or +92 308 5739464 (12 digits)
+  const phoneDigits = guestPhone.replace(/\D/g, ''); // Remove all non-digit characters
+  const phoneLength = phoneDigits.length;
+  
+  // Check if it's Pakistani format
+  if (phoneDigits.startsWith('92')) {
+    // International format: +92 XXX XXXXXXX (12 digits total)
+    if (phoneLength !== 12) {
+      return next(new ErrorHandler("Please provide a valid phone number. International format: +92 XXX XXXXXXX", 400));
+    }
+  } else if (phoneDigits.startsWith('0')) {
+    // Local format: 0XXXXXXXXXX (11 digits)
+    if (phoneLength !== 11) {
+      return next(new ErrorHandler("Please provide a valid phone number. Local format: 0XXXXXXXXXX (11 digits)", 400));
+    }
+  } else if (phoneLength === 10) {
+    // 10 digits without 0 prefix - acceptable (will be formatted)
+    // Allow this format
+  } else {
+    return next(new ErrorHandler("Please provide a valid Pakistani phone number (e.g., 03084143960 or +92 308 5739464)", 400));
   }
 
   // Validate number of guests

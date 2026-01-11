@@ -33,7 +33,7 @@ app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 app.use(cookieParser());
 app.use(
   cors({
-    origin: ["http://localhost:5181", "https://me.senew-tech.com", "https://booking-perl.vercel.app"],
+    origin: ["http://localhost:5181", "https://me.senew-tech.com", "https://booking-perl.vercel.app", "http://192.168.0.100:5181"],
     credentials: true,
   })
 );
