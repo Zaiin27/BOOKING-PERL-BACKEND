@@ -88,8 +88,8 @@ const bannerAdSchema = new mongoose.Schema(
 );
 
 // Indexes for efficient queries
+// Note: 'property_id' field already has index: true which creates an index automatically
 bannerAdSchema.index({ isActive: 1, priority: -1, createdAt: -1 });
-bannerAdSchema.index({ property_id: 1 });
 bannerAdSchema.index({ endDate: 1 });
 // Compound index for active ads query optimization
 bannerAdSchema.index({ isActive: 1, endDate: 1, clickCount: 1, clickLimit: 1 });

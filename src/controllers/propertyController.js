@@ -20,7 +20,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   console.log("Request user:", req.user);
   console.log("Authorization header:", req.headers.authorization);
   console.log("Owner ID from request:", req.body.owner_id);
-  
+
   const {
     name,
     address,
@@ -38,7 +38,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   // Determine the owner (for admin creating property for staff, or staff creating for themselves)
   const ownerId = owner_id || req.user.id;
-  
+
   // Plan-based limits check (only for staff/users, admins and superadmins bypass)
   if (req.user.role !== "admin" && req.user.role !== "superadmin") {
     // Get user's active subscription and plan
@@ -46,18 +46,18 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
       user_id: ownerId,
       status: "active",
     }).populate("plan_id");
-    
+
     let plan;
     if (subscription && subscription.isActive()) {
       plan = subscription.plan_id;
     } else {
       plan = await Plan.findOne({ name: "free" });
     }
-    
+
     if (!plan) {
       return next(new ErrorHandler("Unable to determine your plan. Please contact support.", 500));
     }
-    
+
     // Check property count limit
     if (plan.maxProperties !== -1) {
       const propertyCount = await Property.countDocuments({ owner_id: ownerId });
@@ -70,7 +70,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
         );
       }
     }
-    
+
     // Check photo limit per property
     if (plan.maxPhotosPerProperty !== -1) {
       const photoCount = photos?.filter(photo => photo)?.length || 0;
@@ -84,7 +84,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
       }
     }
   }
-  
+
   // Legacy check: Staff can only create 1 property (if not already handled by plan)
   if (req.user.role === "staff" && !owner_id) {
     const existingProperty = await Property.findOne({ owner_id: req.user.id });
@@ -222,7 +222,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler("Failed to generate unique property ID", 500));
   }
 
-  
+
   // Get plan features to apply (for non-admin users)
   let planFeatures = {
     verifiedBadge: false,
@@ -238,10 +238,10 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
       user_id: ownerId,
       status: "active",
     }).populate("plan_id");
-    
+
     if (subscription && subscription.isActive() && subscription.plan_id) {
       const plan = subscription.plan_id;
-      
+
       // Apply badges
       if (plan.badges) {
         planFeatures = {
@@ -250,7 +250,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
           premiumBadge: plan.badges.premium || false,
         };
       }
-      
+
       // Apply priority/featured
       isPriority = plan.features?.priorityVisibility || false;
       isFeatured = plan.features?.featuredPlacement || false;
@@ -291,7 +291,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   });
 
   console.log("Property created successfully:", property);
-  
+
   res.status(201).json({
     success: true,
     message: "Property created successfully",
@@ -346,7 +346,7 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
 
   const skip = (Number(page) - 1) * Number(limit);
   const limitNum = Math.min(Number(limit), 50); // Max 50 items per page
-  
+
   // Optimized sort options
   let sortOptions = {};
   if (sortBy === "createdAt" && !req.query.sortBy) {
@@ -370,10 +370,10 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
 
   // Optimized field selection - exclude heavy fields
   const selectFields = "name address description roomTypes photos status currency isFeatured isPriority searchPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
-  
+
   // Try aggregation pipeline first, fallback to find() if it fails
   let properties, total;
-  
+
   try {
     // Use aggregation pipeline for better performance
     const pipeline = [
@@ -441,15 +441,15 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
 
     // Parallel execution for count and data
     [properties, total] = await Promise.all([
-      Property.aggregate(pipeline).maxTimeMS(5000), // 5 second timeout
+      Property.aggregate(pipeline).option({ maxTimeMS: 5000 }), // 5 second timeout
       Property.countDocuments(filter).maxTimeMS(2000), // 2 second count timeout
     ]);
   } catch (aggregationError) {
     console.error("Aggregation pipeline error, falling back to find():", aggregationError);
-    
+
     // Fallback to traditional find() method
     const selectFields = "name address description roomTypes photos status currency isFeatured isPriority searchPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
-    
+
     [properties, total] = await Promise.all([
       Property.find(filter)
         .select(selectFields)
@@ -458,15 +458,18 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
         .skip(skip)
         .limit(limitNum)
         .lean(),
-      Property.countDocuments(filter).maxTimeMS(2000),
+      Property.countDocuments(filter).maxTimeMS(2000), // Ensure this returns a number
     ]);
+
+    // Ensure total is a number
+    total = total || 0;
 
     // Calculate available rooms for each property
     properties = properties.map(property => {
       const availableRooms = property.roomTypes?.reduce((total, room) => {
         return total + (room.available || 0);
       }, 0) || 0;
-      
+
       return {
         ...property,
         availableRooms
@@ -492,7 +495,7 @@ export const getPropertyById = catchAsyncErrors(async (req, res, next) => {
   const { id } = req.params;
 
   let property;
-  
+
   // Check if it's a MongoDB ObjectId or property_id
   if (mongoose.Types.ObjectId.isValid(id) && id.length === 24) {
     property = await Property.findById(id).populate("owner_id", "name email contactPhone");
@@ -662,8 +665,8 @@ export const canCreateProperty = catchAsyncErrors(async (req, res, next) => {
     return res.json({
       success: true,
       canCreate,
-      message: canCreate 
-        ? "You can create a property" 
+      message: canCreate
+        ? "You can create a property"
         : "You already have a property. Contact admin for additional properties.",
       existingProperty: existingProperty ? {
         id: existingProperty._id,
@@ -787,9 +790,9 @@ export const getRealTimeRoomAvailability = catchAsyncErrors(async (req, res, nex
     property_id: id,
     bookingStatus: { $in: ["pending", "confirmed", "active"] },
     $or: [
-      { 
-        checkInDate: { $lt: checkOut }, 
-        checkOutDate: { $gt: checkIn } 
+      {
+        checkInDate: { $lt: checkOut },
+        checkOutDate: { $gt: checkIn }
       }
     ]
   });

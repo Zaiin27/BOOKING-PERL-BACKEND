@@ -83,7 +83,7 @@ const planSchema = new mongoose.Schema(
 );
 
 // Indexes
-planSchema.index({ name: 1 });
+// Note: 'name' field already has unique: true which creates an index automatically
 planSchema.index({ isActive: 1 });
 
 const Plan = mongoose.model("Plan", planSchema);
