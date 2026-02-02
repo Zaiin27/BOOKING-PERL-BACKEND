@@ -299,183 +299,77 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   });
 });
 
-// @desc    Get all properties (Optimized)
+// @desc    Get all properties (Performance Optimized)
 // @route   GET /api/v1/properties
 // @access  Public
 export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
-  const { page = 1, limit = 10, status, search, sortBy = "createdAt", order = "desc", owner_id } = req.query;
+  const {
+    page = 1,
+    limit = 10,
+    status,
+    search,
+    sortBy = "createdAt",
+    order = "desc",
+    owner_id
+  } = req.query;
 
+  const limitNum = Math.min(parseInt(limit), 50);
+  const skip = (parseInt(page) - 1) * limitNum;
+
+  // Build Filter
   const filter = {};
 
-  // Role-based filtering
-  if (req.user) {
-    if (req.user.role === "staff") {
-      filter.owner_id = req.user.id;
-    }
-  }
-
-  // Owner ID filter
-  if (owner_id) {
+  if (req.user?.role === "staff") {
+    filter.owner_id = req.user.id;
+  } else if (owner_id) {
     filter.owner_id = owner_id;
   }
 
-  // Status filter - optimized with index
   if (status) {
     filter.status = status;
-  } else {
-    if (!req.user || req.user.role === "user") {
-      filter.status = "active";
-    }
+  } else if (!req.user || req.user.role === "user") {
+    filter.status = "active";
   }
 
-  // Optimized search - use text index if available, otherwise regex with limit
-  if (search && search.trim()) {
+  if (search?.trim()) {
     const searchTerm = search.trim();
-    // Use text search if index exists, otherwise use optimized regex
-    if (searchTerm.length > 2) {
-      filter.$or = [
-        { name: { $regex: searchTerm, $options: "i" } },
-        { address: { $regex: searchTerm, $options: "i" } },
-      ];
-      // Only search description if search term is longer
-      if (searchTerm.length > 5) {
-        filter.$or.push({ description: { $regex: searchTerm, $options: "i" } });
-      }
-    }
-  }
-
-  const skip = (Number(page) - 1) * Number(limit);
-  const limitNum = Math.min(Number(limit), 50); // Max 50 items per page
-
-  // Optimized sort options
-  let sortOptions = {};
-  if (sortBy === "createdAt" && !req.query.sortBy) {
-    sortOptions = {
-      isFeatured: -1,
-      isPriority: -1,
-      searchPriority: -1,
-      createdAt: -1,
-    };
-  } else {
-    sortOptions[sortBy] = order === "asc" ? 1 : -1;
-    if (sortBy !== "isFeatured" && sortBy !== "isPriority" && sortBy !== "searchPriority") {
-      sortOptions = {
-        isFeatured: -1,
-        isPriority: -1,
-        searchPriority: -1,
-        ...sortOptions,
-      };
-    }
-  }
-
-  // Optimized field selection - exclude heavy fields
-  const selectFields = "name address description roomTypes photos status currency isFeatured isPriority searchPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
-
-  // Try aggregation pipeline first, fallback to find() if it fails
-  let properties, total;
-
-  try {
-    // Use aggregation pipeline for better performance
-    const pipeline = [
-      { $match: filter },
-      { $sort: sortOptions },
-      { $skip: skip },
-      { $limit: limitNum },
-      {
-        $project: {
-          name: 1,
-          address: 1,
-          description: 1,
-          roomTypes: 1,
-          photos: { $slice: ["$photos", 1] }, // Only first photo for list view
-          status: 1,
-          currency: 1,
-          isFeatured: 1,
-          isPriority: 1,
-          searchPriority: 1,
-          owner_id: 1,
-          createdAt: 1,
-          contactEmail: 1,
-          amenities: 1,
-          checkInTime: 1,
-          checkOutTime: 1,
-          // Calculate available rooms in projection
-          availableRooms: {
-            $reduce: {
-              input: { $ifNull: ["$roomTypes", []] },
-              initialValue: 0,
-              in: { $add: ["$$value", { $ifNull: ["$$this.available", 0] }] }
-            }
-          }
-        }
-      },
-      // Lightweight populate using lookup
-      {
-        $lookup: {
-          from: "users",
-          localField: "owner_id",
-          foreignField: "_id",
-          as: "owner",
-          pipeline: [
-            { $project: { name: 1, email: 1, role: 1 } }
-          ]
-        }
-      },
-      {
-        $unwind: {
-          path: "$owner",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $addFields: {
-          owner_id: "$owner"
-        }
-      },
-      {
-        $project: {
-          owner: 0
-        }
-      }
+    filter.$or = [
+      { name: { $regex: searchTerm, $options: "i" } },
+      { address: { $regex: searchTerm, $options: "i" } },
     ];
-
-    // Parallel execution for count and data
-    [properties, total] = await Promise.all([
-      Property.aggregate(pipeline).option({ maxTimeMS: 5000 }), // 5 second timeout
-      Property.countDocuments(filter).maxTimeMS(2000), // 2 second count timeout
-    ]);
-  } catch (aggregationError) {
-    console.error("Aggregation pipeline error, falling back to find():", aggregationError);
-
-    // Fallback to traditional find() method
-    const selectFields = "name address description roomTypes photos status currency isFeatured isPriority searchPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
-
-    [properties, total] = await Promise.all([
-      Property.find(filter)
-        .select(selectFields)
-        .populate("owner_id", "name email role")
-        .sort(sortOptions)
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Property.countDocuments(filter).maxTimeMS(2000), // Ensure this returns a number
-    ]);
-
-    // Ensure total is a number
-    total = total || 0;
-
-    // Calculate available rooms for each property
-    properties = properties.map(property => {
-      const availableRooms = property.roomTypes?.reduce((total, room) => {
-        return total + (room.available || 0);
-      }, 0) || 0;
-
-      return {
-        ...property,
-        availableRooms
-      };
-    });
   }
+
+  // Sort Logic (Simplified for speed)
+  const sort = {};
+  if (sortBy === "createdAt") {
+    sort.isFeatured = -1;
+    sort.isPriority = -1;
+    sort.createdAt = order === "asc" ? 1 : -1;
+  } else {
+    sort[sortBy] = order === "asc" ? 1 : -1;
+  }
+
+  // Fields selection (Exclude heavy description and multiple photos in list)
+  const select = "name address roomTypes photos status currency isFeatured isPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
+
+  // Execute in parallel for speed
+  const [properties, total] = await Promise.all([
+    Property.find(filter)
+      .select(select)
+      .populate("owner_id", "name email")
+      .sort(sort)
+      .skip(skip)
+      .limit(limitNum)
+      .lean(),
+    Property.countDocuments(filter)
+  ]);
+
+  // Minor post-processing (Calculated values)
+  const processedProperties = properties.map(property => ({
+    ...property,
+    photos: property.photos?.length > 0 ? [property.photos[0]] : [], // Only send first image
+    availableRooms: property.roomTypes?.reduce((acc, room) => acc + (room.available || 0), 0) || 0
+  }));
 
   res.json({
     success: true,
@@ -485,7 +379,7 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
       page: Number(page),
       limit: limitNum,
       pages: Math.ceil(total / limitNum),
-      properties,
+      properties: processedProperties,
     },
   });
 });

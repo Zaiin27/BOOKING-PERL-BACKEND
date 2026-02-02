@@ -183,6 +183,12 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    commissionStatus: {
+      type: String,
+      enum: ["unpaid", "paid"],
+      default: "unpaid",
+      index: true,
+    },
   },
   {
     timestamps: true,

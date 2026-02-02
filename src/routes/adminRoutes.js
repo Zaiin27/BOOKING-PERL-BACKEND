@@ -30,6 +30,7 @@ import {
   getBookingStatsByDateRange,
   getPropertyWiseStats,
   getUpcomingActivity,
+  updateStaffCommissionStatus,
 } from "../controllers/adminController.js";
 
 const router = express.Router();
@@ -50,6 +51,9 @@ router.patch(
 );
 router.patch("/promote-to-staff", authorizeRole("admin"), promoteToAdminStaff);
 router.patch("/promote-to-admin", authorizeRole("admin"), promoteToAdmin);
+
+// Commission endpoints
+router.patch("/commission/staff/:staffId/pay", authorizeRole("admin"), updateStaffCommissionStatus);
 
 // Generic user management endpoints (admin only)
 router.get("/users", authorizeRole("admin"), listUsers);

@@ -218,16 +218,16 @@ export const listAdminOrders = catchAsyncErrors(async (req, res, next) => {
     // search in order_id, cart_url, and customer email
     ...(searchRegex
       ? [
-          {
-            $match: {
-              $or: [
-                { order_id: { $regex: searchRegex } },
-                { cart_url: { $regex: searchRegex } },
-                { "customer.email": { $regex: searchRegex } },
-              ],
-            },
+        {
+          $match: {
+            $or: [
+              { order_id: { $regex: searchRegex } },
+              { cart_url: { $regex: searchRegex } },
+              { "customer.email": { $regex: searchRegex } },
+            ],
           },
-        ]
+        },
+      ]
       : []),
 
     // latest payment
@@ -264,10 +264,10 @@ export const listAdminOrders = catchAsyncErrors(async (req, res, next) => {
     // filter by assigned staff if asked
     ...(staff
       ? [
-          {
-            $match: { "ticket.claimed_by": new mongoose.Types.ObjectId(staff) },
-          },
-        ]
+        {
+          $match: { "ticket.claimed_by": new mongoose.Types.ObjectId(staff) },
+        },
+      ]
       : []),
 
     // staff user
@@ -700,7 +700,7 @@ export const updateUser = catchAsyncErrors(async (req, res, next) => {
   // Update paymentType if provided (mainly for staff)
   if (paymentType && ["online", "cash", "both"].includes(paymentType)) {
     user.paymentType = paymentType;
-    
+
     // If staff paymentType is updated, update all their properties
     if (user.role === "staff") {
       await Property.updateMany(
@@ -1024,8 +1024,8 @@ export const getMonthlyOrders = catchAsyncErrors(async (req, res, next) => {
           payment?.method === "solana"
             ? "SOL"
             : payment?.method === "token"
-            ? "SPL"
-            : "Card",
+              ? "SPL"
+              : "Card",
         createdAt: order.createdAt,
         paymentStatus: payment?.status || "unknown",
       };
@@ -1304,32 +1304,21 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  const [
-    totalProperties,
-    totalBookings,
-    todayBookings,
-    totalRevenue,
-    pendingBookings,
-    confirmedBookings,
-    totalCommissionOnline,
-    totalCommissionOnArrival,
-    todayCommissionOnline,
-    todayCommissionOnArrival,
-  ] = await Promise.all([
+  const results = await Promise.all([
     // Total properties
-    req.user.role === "admin" 
+    req.user.role === "admin"
       ? Property.countDocuments({ status: "active" })
       : Property.countDocuments({ owner_id: req.user.id, status: "active" }),
-    
+
     // Total bookings
     Booking.countDocuments(filter),
-    
+
     // Today's bookings
     Booking.countDocuments({
       ...filter,
       createdAt: { $gte: today, $lt: tomorrow },
     }),
-    
+
     // Total revenue from paid online bookings + confirmed on-arrival bookings
     // Online: only count if paymentStatus is "paid"
     // On-arrival: count if bookingStatus is "confirmed" (payment will be collected on arrival)
@@ -1345,51 +1334,94 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
       },
       { $group: { _id: null, total: { $sum: "$totalAmount" } } },
     ]),
-    
+
     // Pending bookings
     Booking.countDocuments({ ...filter, bookingStatus: "pending" }),
-    
+
     // Confirmed bookings
     Booking.countDocuments({ ...filter, bookingStatus: "confirmed" }),
-    
-    // Total commission from paid online bookings
+
+    // Total commission from paid online bookings (unpaid status only)
     Booking.aggregate([
-      { $match: { ...filter, paymentStatus: "paid", paymentType: "online" } },
+      { $match: { ...filter, paymentStatus: "paid", paymentType: "online", commissionStatus: "unpaid" } },
       { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
     ]),
-    
-    // Total commission from confirmed on_arrival bookings (payment will be collected on arrival)
+
+    // Total commission from confirmed on_arrival bookings (unpaid status only)
     Booking.aggregate([
-      { $match: { ...filter, bookingStatus: "confirmed", paymentType: "on_arrival" } },
+      { $match: { ...filter, bookingStatus: "confirmed", paymentType: "on_arrival", commissionStatus: "unpaid" } },
       { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
     ]),
-    
+
     // Today's commission from paid online bookings
     Booking.aggregate([
-      { 
-        $match: { 
-          ...filter, 
+      {
+        $match: {
+          ...filter,
           paymentStatus: "paid",
           paymentType: "online",
           createdAt: { $gte: today, $lt: tomorrow }
-        } 
+        }
       },
       { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
     ]),
-    
+
     // Today's commission from confirmed on_arrival bookings
     Booking.aggregate([
-      { 
-        $match: { 
-          ...filter, 
+      {
+        $match: {
+          ...filter,
           bookingStatus: "confirmed",
           paymentType: "on_arrival",
           createdAt: { $gte: today, $lt: tomorrow }
-        } 
+        }
       },
       { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
     ]),
+
+    // Total Hotel Owner Revenue (All confirmed/paid bookings)
+    Booking.aggregate([
+      {
+        $match: {
+          ...filter,
+          $or: [
+            { paymentStatus: "paid", paymentType: "online" },
+            { bookingStatus: "confirmed", paymentType: "on_arrival" },
+          ],
+        },
+      },
+      { $group: { _id: null, total: { $sum: "$hotelOwnerAmount" } } },
+    ]),
+
+    // Total Revenue (100%) - All confirmed/paid bookings
+    Booking.aggregate([
+      {
+        $match: {
+          ...filter,
+          $or: [
+            { paymentStatus: "paid", paymentType: "online" },
+            { bookingStatus: "confirmed", paymentType: "on_arrival" },
+          ],
+        },
+      },
+      { $group: { _id: null, total: { $sum: "$totalAmount" } } },
+    ]),
   ]);
+
+  const [
+    totalProperties,
+    totalBookings,
+    todayBookings,
+    totalRevenueAgg,
+    pendingBookings,
+    confirmedBookings,
+    totalCommissionOnline,
+    totalCommissionOnArrival,
+    todayCommissionOnline,
+    todayCommissionOnArrival,
+    totalHotelOwnerRevenueAgg,
+    totalUnpaidRevenueAgg,
+  ] = results;
 
   // Get currency from bookings (default to PKR if most bookings are PKR)
   const currencyData = await Booking.aggregate([
@@ -1398,11 +1430,14 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
     { $sort: { count: -1 } },
     { $limit: 1 }
   ]);
-  
+
   const detectedCurrency = currencyData[0]?._id || "PKR";
 
-  // Calculate total commission (online + on-arrival combined)
+  // Calculate total commission (online + on-arrival combined) - Only unpaid
   const totalCommission = (totalCommissionOnline[0]?.total || 0) + (totalCommissionOnArrival[0]?.total || 0);
+
+  const totalHotelRevenue = totalHotelOwnerRevenueAgg[0]?.total || 0;
+  const totalUnpaidRevenue = totalUnpaidRevenueAgg[0]?.total || 0;
 
   res.json({
     success: true,
@@ -1411,16 +1446,49 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
       totalProperties,
       totalBookings,
       todayBookings,
-      totalRevenue: totalRevenue[0]?.total || 0,
+      totalRevenue: totalRevenueAgg[0]?.total || 0,
       pendingBookings,
       confirmedBookings,
       totalCommissionOnline: totalCommissionOnline[0]?.total || 0,
       totalCommissionOnArrival: totalCommissionOnArrival[0]?.total || 0,
-      totalCommission, // Combined total commission
+      totalCommission, // Combined total commission (Unpaid)
+      totalHotelRevenue, // Hotel's 90% (Unpaid)
+      totalUnpaidRevenue, // Total 100% (Unpaid)
       todayCommissionOnline: todayCommissionOnline[0]?.total || 0,
       todayCommissionOnArrival: todayCommissionOnArrival[0]?.total || 0,
       currency: detectedCurrency,
     },
+  });
+});
+
+// @desc    Update staff commission status to paid
+// @route   PATCH /api/v1/admin/commission/staff/:staffId/pay
+// @access  Admin
+export const updateStaffCommissionStatus = catchAsyncErrors(async (req, res, next) => {
+  const { staffId } = req.params;
+  const { status } = req.body;
+
+  if (status !== "paid") {
+    return next(new ErrorHandler("Invalid status. Only 'paid' is allowed.", 400));
+  }
+
+  // Find properties owned by this staff
+  const properties = await Property.find({ owner_id: staffId }).select("_id");
+  const propertyIds = properties.map((p) => p._id);
+
+  if (propertyIds.length === 0) {
+    return next(new ErrorHandler("This staff member has no properties.", 404));
+  }
+
+  // Update all unpaid bookings for these properties
+  const result = await Booking.updateMany(
+    { property_id: { $in: propertyIds }, commissionStatus: "unpaid" },
+    { commissionStatus: "paid" }
+  );
+
+  res.json({
+    success: true,
+    message: `Marked ${result.modifiedCount} bookings as paid for staff.`,
   });
 });
 
