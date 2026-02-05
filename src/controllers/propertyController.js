@@ -121,7 +121,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   }
 
   // Validate phone number
-  if (contactPhone && !/^[\+]?[1-9][\d]{0,15}$/.test(contactPhone)) {
+  if (contactPhone && !/^[\+]?[0-9\s\-]{7,20}$/.test(contactPhone)) {
     return next(new ErrorHandler("Please provide a valid phone number", 400));
   }
 
