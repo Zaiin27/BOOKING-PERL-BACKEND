@@ -61,18 +61,44 @@ export const promoteToAdmin = catchAsyncErrors(async (req, res, next) => {
   res.json({ success: true, message: "User promoted to admin", data: saved });
 });
 
+export const promoteToSubadmin = catchAsyncErrors(async (req, res, next) => {
+  const { userId, email, username } = req.body || {};
+
+  if (!userId && !email && !username) {
+    return next(new ErrorHandler("Provide userId or email or username", 400));
+  }
+
+  const user = await User.findOne(
+    userId ? { _id: userId } : email ? { email } : { username }
+  );
+
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+
+  user.role = "subadmin";
+  const saved = await user.save();
+
+  res.json({ success: true, message: "User promoted to subadmin", data: saved });
+});
+
 export const listUsers = catchAsyncErrors(async (req, res, next) => {
   const { page = 1, limit = 5, q, active, role } = req.query || {};
   const filter = {};
 
   if (role) {
     const roles = role.split(",").map((r) => r.trim());
-    const allowedRoles = ["user", "staff", "admin"];
+    const allowedRoles = ["user", "staff", "admin", "subadmin"];
     const validRoles = roles.filter((r) => allowedRoles.includes(r));
 
     if (validRoles.length > 0) {
       filter.role = { $in: validRoles };
     }
+  }
+
+  // If subadmin, only show their created users
+  if (req.user.role === "subadmin") {
+    filter.createdBy = req.user.id;
   }
 
   if (typeof q === "string" && q.trim()) {
@@ -103,8 +129,13 @@ export const listStaffs = catchAsyncErrors(async (req, res, next) => {
   const filter = { role: "staff" }; // Default to staff role
 
   // Override role filter if provided
-  if (role && ["user", "staff", "admin"].includes(role)) {
+  if (role && ["user", "staff", "admin", "subadmin"].includes(role)) {
     filter.role = role;
+  }
+
+  // If subadmin, only show their created staff
+  if (req.user.role === "subadmin") {
+    filter.createdBy = req.user.id;
   }
 
   if (typeof q === "string" && q.trim()) {
@@ -181,6 +212,13 @@ export const listAdminOrders = catchAsyncErrors(async (req, res, next) => {
     to,
     sort = "createdAt:desc",
   } = req.query || {};
+
+  // If subadmin, get their staff IDs 
+  let subadminStaffIds = [];
+  if (req.user.role === "subadmin") {
+    const myStaff = await User.find({ createdBy: req.user.id }).select("_id");
+    subadminStaffIds = myStaff.map(s => s._id);
+  }
 
   const skip = (Number(page) - 1) * Number(limit);
 
@@ -268,7 +306,13 @@ export const listAdminOrders = catchAsyncErrors(async (req, res, next) => {
           $match: { "ticket.claimed_by": new mongoose.Types.ObjectId(staff) },
         },
       ]
-      : []),
+      : req.user.role === "subadmin"
+        ? [
+          {
+            $match: { "ticket.claimed_by": { $in: subadminStaffIds } },
+          },
+        ]
+        : []),
 
     // staff user
     {
@@ -440,6 +484,10 @@ export const getAllUsers = catchAsyncErrors(async (req, res, next) => {
   if (role) {
     filter.role = role;
   }
+  // If subadmin, only show their created users
+  if (req.user.role === "subadmin") {
+    filter.createdBy = req.user.id;
+  }
   if (typeof active !== "undefined") {
     filter.isActive = String(active).toLowerCase() === "true";
   }
@@ -523,9 +571,16 @@ export const createUser = catchAsyncErrors(async (req, res, next) => {
   }
 
   // Validate role
-  if (!["user", "staff", "admin"].includes(role)) {
+  if (!["user", "staff", "admin", "subadmin"].includes(role)) {
     return next(
-      new ErrorHandler("Invalid role. Must be user, staff, or admin", 400)
+      new ErrorHandler("Invalid role. Must be user, staff, admin, or subadmin", 400)
+    );
+  }
+
+  // Check permissions: subadmin can only create staff
+  if (req.user.role === "subadmin" && role !== "staff") {
+    return next(
+      new ErrorHandler("Subadmins are only allowed to create staff members", 403)
     );
   }
 
@@ -547,6 +602,7 @@ export const createUser = catchAsyncErrors(async (req, res, next) => {
     email,
     password,
     role,
+    createdBy: req.user.id,
     isVerified: true, // Auto-verify admin created users
   };
 
@@ -630,6 +686,7 @@ export const createStaff = catchAsyncErrors(async (req, res, next) => {
     email,
     password,
     role: "staff",
+    createdBy: req.user.id,
     isVerified: true, // Auto-verify staff members
   };
 
@@ -684,11 +741,13 @@ export const updateUser = catchAsyncErrors(async (req, res, next) => {
   }
 
   // Update role if provided
-  if (role && ["user", "staff", "admin"].includes(role)) {
+  if (req.user.role === "admin" && role && ["user", "staff", "admin", "subadmin"].includes(role)) {
     user.role = role;
-  } else if (role && !["user", "staff", "admin"].includes(role)) {
+  } else if (req.user.role === "subadmin" && role === "staff") {
+    user.role = "staff";
+  } else if (role && !["user", "staff", "admin", "subadmin"].includes(role)) {
     return next(
-      new ErrorHandler("Invalid role. Must be user, staff, or admin", 400)
+      new ErrorHandler("Invalid role. Must be user, staff, admin, or subadmin", 400)
     );
   }
 
@@ -759,11 +818,11 @@ export const updateStaff = catchAsyncErrors(async (req, res, next) => {
   }
 
   // Update role if provided
-  if (role && ["user", "staff", "admin"].includes(role)) {
+  if (role && ["user", "staff", "admin", "subadmin"].includes(role)) {
     user.role = role;
-  } else if (role && !["user", "staff", "admin"].includes(role)) {
+  } else if (role && !["user", "staff", "admin", "subadmin"].includes(role)) {
     return next(
-      new ErrorHandler("Invalid role. Must be user, staff, or admin", 400)
+      new ErrorHandler("Invalid role. Must be user, staff, admin, or subadmin", 400)
     );
   }
 
@@ -1292,12 +1351,21 @@ export const getAllStaff = catchAsyncErrors(async (req, res, next) => {
 export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next) => {
   const filter = {};
 
-  // Staff can only see their properties' bookings
+  // Staff/Subadmin data isolation
   if (req.user.role === "staff") {
     const properties = await Property.find({ owner_id: req.user.id }).select("_id");
     const propertyIds = properties.map((p) => p._id);
     filter.property_id = { $in: propertyIds };
+  } else if (req.user.role === "subadmin") {
+    const myStaff = await User.find({ createdBy: req.user.id }).select("_id");
+    const staffIds = [req.user.id, ...myStaff.map((s) => s._id)];
+    const properties = await Property.find({
+      owner_id: { $in: staffIds },
+    }).select("_id");
+    const propertyIds = properties.map((p) => p._id);
+    filter.property_id = { $in: propertyIds };
   }
+
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -1308,7 +1376,13 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
     // Total properties
     req.user.role === "admin"
       ? Property.countDocuments({ status: "active" })
-      : Property.countDocuments({ owner_id: req.user.id, status: "active" }),
+      : req.user.role === "subadmin"
+        ? (async () => {
+          const myStaff = await User.find({ createdBy: req.user.id }).select("_id");
+          const staffIds = [req.user.id, ...myStaff.map(s => s._id)];
+          return Property.countDocuments({ owner_id: { $in: staffIds }, status: "active" });
+        })()
+        : Property.countDocuments({ owner_id: req.user.id, status: "active" }),
 
     // Total bookings
     Booking.countDocuments(filter),
@@ -1457,6 +1531,11 @@ export const getHotelDashboardOverview = catchAsyncErrors(async (req, res, next)
       todayCommissionOnline: todayCommissionOnline[0]?.total || 0,
       todayCommissionOnArrival: todayCommissionOnArrival[0]?.total || 0,
       currency: detectedCurrency,
+      // Performance metrics for subadmin dashboard
+      responseTime: "98%", // Simulated for now
+      taskCompletion: totalBookings > 0
+        ? `${Math.round(((totalBookings - pendingBookings) / totalBookings) * 100)}%`
+        : "0%"
     },
   });
 });
@@ -1584,9 +1663,13 @@ export const getBookingStatsByDateRange = catchAsyncErrors(async (req, res, next
 export const getPropertyWiseStats = catchAsyncErrors(async (req, res, next) => {
   const filter = {};
 
-  // Staff can only see their properties
+  // Staff/Subadmin data isolation
   if (req.user.role === "staff") {
     filter.owner_id = req.user.id;
+  } else if (req.user.role === "subadmin") {
+    const myStaff = await User.find({ createdBy: req.user.id }).select("_id");
+    const staffIds = [req.user.id, ...myStaff.map(s => s._id)];
+    filter.owner_id = { $in: staffIds };
   }
 
   const propertyStats = await Property.aggregate([

@@ -40,10 +40,10 @@ const checkRoomAvailability = async (propertyId, checkInDate, checkOutDate, requ
   const overlappingBookings = allBookings.filter((booking) => {
     const bookingCheckIn = new Date(booking.checkInDate);
     const bookingCheckOut = new Date(booking.checkOutDate);
-    
+
     // Check if booking overlaps with requested period
     return (
-      bookingCheckIn < checkOut && 
+      bookingCheckIn < checkOut &&
       bookingCheckOut > checkIn &&
       booking.bookingStatus !== "cancelled"
     );
@@ -64,7 +64,7 @@ const checkRoomAvailability = async (propertyId, checkInDate, checkOutDate, requ
   const availability = {};
   for (const requestedRoom of requestedRooms) {
     const propertyRoom = property.roomTypes.find((r) => r.type === requestedRoom.roomType);
-    
+
     if (!propertyRoom) {
       throw new ErrorHandler(`Room type ${requestedRoom.roomType} not found in property`, 400);
     }
@@ -79,7 +79,7 @@ const checkRoomAvailability = async (propertyId, checkInDate, checkOutDate, requ
       requested: requestedRoom.quantity,
       canBook: availableCount >= requestedRoom.quantity,
       price: propertyRoom.price,
-      overlappingBookings: overlappingBookings.filter(b => 
+      overlappingBookings: overlappingBookings.filter(b =>
         b.bookedRooms.some(r => r.roomType === requestedRoom.roomType)
       ).map(b => ({
         bookingReference: b.bookingReference,
@@ -103,7 +103,7 @@ const checkRoomAvailability = async (propertyId, checkInDate, checkOutDate, requ
 // Helper function to update booking statuses based on current date
 const updateBookingStatuses = async () => {
   const now = new Date();
-  
+
   // Update bookings that should be marked as completed (check-out date has passed)
   await Booking.updateMany(
     {
@@ -148,7 +148,7 @@ export const extendBooking = catchAsyncErrors(async (req, res, next) => {
   // Validate new check-out date
   const currentCheckOut = new Date(booking.checkOutDate);
   const newCheckOut = new Date(newCheckOutDate);
-  
+
   if (newCheckOut <= currentCheckOut) {
     return next(new ErrorHandler("New check-out date must be after current check-out date", 400));
   }
@@ -164,7 +164,7 @@ export const extendBooking = catchAsyncErrors(async (req, res, next) => {
   // Calculate additional cost
   const additionalNights = Math.ceil((newCheckOut - currentCheckOut) / (1000 * 60 * 60 * 24));
   let additionalCost = 0;
-  
+
   booking.bookedRooms.forEach(room => {
     const roomAvailability = availability[room.roomType];
     additionalCost += roomAvailability.price * room.quantity * additionalNights;
@@ -284,7 +284,7 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
   // Validate guest phone - Support Pakistani formats: 03084143960 (11 digits) or +92 308 5739464 (12 digits)
   const phoneDigits = guestPhone.replace(/\D/g, ''); // Remove all non-digit characters
   const phoneLength = phoneDigits.length;
-  
+
   // Check if it's Pakistani format
   if (phoneDigits.startsWith('92')) {
     // International format: +92 XXX XXXXXXX (12 digits total)
@@ -324,7 +324,7 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
     const [year, month, day] = checkInDate.split('-').map(Number);
     checkIn = new Date(year, month - 1, day);
   }
-  
+
   if (typeof finalCheckOutDate === 'string' && finalCheckOutDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
     const [year, month, day] = finalCheckOutDate.split('-').map(Number);
     checkOut = new Date(year, month - 1, day);
@@ -337,7 +337,7 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
   // Get today's date at midnight in local timezone for comparison
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   // Normalize check-in date to midnight for comparison (local timezone)
   const checkInDateOnly = new Date(checkIn);
   checkInDateOnly.setHours(0, 0, 0, 0);
@@ -354,11 +354,11 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
   // Validate minimum and maximum stay duration
   const diffTime = checkOut - checkIn;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
+
   if (diffDays < 1) {
     return next(new ErrorHandler("Minimum stay is 1 night", 400));
   }
-  
+
   if (diffDays > 30) {
     return next(new ErrorHandler("Maximum stay is 30 nights", 400));
   }
@@ -371,7 +371,7 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
   // Validate room booking data
   let totalRoomsRequested = 0;
   const roomTypeSet = new Set();
-  
+
   for (const room of bookedRooms) {
     // Validate room type
     if (!room.roomType || !['single', 'double'].includes(room.roomType)) {
@@ -451,7 +451,7 @@ export const createBooking = catchAsyncErrors(async (req, res, next) => {
   // Determine booking and payment status based on payment type
   let bookingStatus = "pending";
   let paymentStatus = "pending";
-  
+
   if (paymentType === "on_arrival") {
     // For payment on arrival, booking is confirmed immediately
     bookingStatus = "confirmed";
@@ -548,7 +548,15 @@ export const getAllBookings = catchAsyncErrors(async (req, res, next) => {
       const properties = await Property.find({ owner_id: req.user.id }).select("_id");
       const propertyIds = properties.map((p) => p._id);
       filter.property_id = { $in: propertyIds };
+    } else if (req.user.role === "subadmin") {
+      // Subadmin see bookings for their staff's properties
+      const myStaff = await User.find({ createdBy: req.user.id }).select("_id");
+      const staffIds = [req.user.id, ...myStaff.map((s) => s._id)];
+      const properties = await Property.find({ owner_id: { $in: staffIds } }).select("_id");
+      const propertyIds = properties.map((p) => p._id);
+      filter.property_id = { $in: propertyIds };
     }
+
     // Admin sees all bookings
   } else {
     // If no user (public route), check for staff_id parameter for filtering
@@ -615,12 +623,12 @@ export const getAllBookings = catchAsyncErrors(async (req, res, next) => {
   // Hide phone numbers from staff (only admin can see phone numbers)
   const processedBookings = bookings.map(booking => {
     const bookingObj = { ...booking };
-    
+
     // If user is staff OR staff_id is provided in query (for public admin route), hide phone number
     if ((req.user && req.user.role === "staff") || req.query.staff_id) {
       bookingObj.guestPhone = "***-***-****"; // Hide phone number
     }
-    
+
     return bookingObj;
   });
 
@@ -870,12 +878,19 @@ export const getBookingStats = catchAsyncErrors(async (req, res, next) => {
 
   const filter = {};
 
-  // Staff can only see stats for their properties
+  // Staff/Subadmin data isolation
   if (req.user.role === "staff") {
     const properties = await Property.find({ owner_id: req.user.id }).select("_id");
     const propertyIds = properties.map((p) => p._id);
     filter.property_id = { $in: propertyIds };
+  } else if (req.user.role === "subadmin") {
+    const myStaff = await User.find({ createdBy: req.user.id }).select("_id");
+    const staffIds = [req.user.id, ...myStaff.map((s) => s._id)];
+    const properties = await Property.find({ owner_id: { $in: staffIds } }).select("_id");
+    const propertyIds = properties.map((p) => p._id);
+    filter.property_id = { $in: propertyIds };
   }
+
 
   const [statusStats, paymentStats, totalRevenue, todayBookings] = await Promise.all([
     // Booking status statistics
