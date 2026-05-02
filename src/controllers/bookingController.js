@@ -583,7 +583,21 @@ export const getAllBookings = catchAsyncErrors(async (req, res, next) => {
 
   // Property filter
   if (property_id) {
-    filter.property_id = property_id;
+    if (filter.property_id && filter.property_id.$in) {
+      // If we already have a list of allowed properties (staff/subadmin), 
+      // ensure the requested property_id is within that list
+      const allowedIds = filter.property_id.$in.map(id => id.toString());
+      if (allowedIds.includes(property_id.toString())) {
+        filter.property_id = property_id;
+      } else {
+        // If they requested a property they don't own, keep the restriction to their own properties
+        // This effectively prevents them from seeing others' property bookings
+        console.log(`User ${req.user.id} attempted to access property ${property_id} which they don't own.`);
+      }
+    } else {
+      // Admin or public route with staff_id filter already set
+      filter.property_id = property_id;
+    }
   }
 
   // Date range filter

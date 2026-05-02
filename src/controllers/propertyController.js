@@ -344,18 +344,24 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
   if (sortBy === "createdAt") {
     sort.isFeatured = -1;
     sort.isPriority = -1;
+    sort.searchPriority = -1;
     sort.createdAt = order === "asc" ? 1 : -1;
   } else {
     sort[sortBy] = order === "asc" ? 1 : -1;
   }
 
-  // Fields selection (Exclude heavy description and multiple photos in list)
-  const select = "name address roomTypes photos status currency isFeatured isPriority owner_id createdAt contactEmail amenities checkInTime checkOutTime";
+  // Fields selection (Exclude heavy description and fetch only 1 photo)
+  const selectFields = {
+    name: 1, address: 1, totalRooms: 1, roomTypes: 1, status: 1, currency: 1,
+    isFeatured: 1, isPriority: 1, owner_id: 1, createdAt: 1,
+    contactEmail: 1, amenities: 1, checkInTime: 1, checkOutTime: 1,
+    photos: { $slice: 1 } // ONLY FETCH THE FIRST PHOTO FROM DB
+  };
 
   // Execute in parallel for speed
   const [properties, total] = await Promise.all([
     Property.find(filter)
-      .select(select)
+      .select(selectFields)
       .populate("owner_id", "name email")
       .sort(sort)
       .skip(skip)
@@ -364,12 +370,33 @@ export const getAllProperties = catchAsyncErrors(async (req, res, next) => {
     Property.countDocuments(filter)
   ]);
 
+  // Fetch active bookings for these properties to calculate current availability
+  const propertyIds = properties.map(p => p._id);
+  const now = new Date();
+  const activeBookings = await Booking.find({
+    property_id: { $in: propertyIds },
+    bookingStatus: { $in: ["confirmed", "active", "pending"] }, // Include pending as well to be safe
+    checkInDate: { $lte: now },
+    checkOutDate: { $gt: now }
+  }).select("property_id totalRooms");
+
+  // Map booked rooms count to property IDs
+  const bookedRoomsMap = activeBookings.reduce((acc, booking) => {
+    const pid = booking.property_id.toString();
+    acc[pid] = (acc[pid] || 0) + (booking.totalRooms || 0);
+    return acc;
+  }, {});
+
   // Minor post-processing (Calculated values)
-  const processedProperties = properties.map(property => ({
-    ...property,
-    photos: property.photos?.length > 0 ? [property.photos[0]] : [], // Only send first image
-    availableRooms: property.roomTypes?.reduce((acc, room) => acc + (room.available || 0), 0) || 0
-  }));
+  const processedProperties = properties.map(property => {
+    const bookedCount = bookedRoomsMap[property._id.toString()] || 0;
+    return {
+      ...property,
+      photos: property.photos?.length > 0 ? [property.photos[0]] : [],
+      // Real-time availability calculation: Total Rooms minus Currently Occupied
+      availableRooms: Math.max(0, (property.totalRooms || 0) - bookedCount)
+    };
+  });
 
   res.json({
     success: true,

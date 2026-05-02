@@ -164,6 +164,7 @@ propertySchema.virtual("availableRooms").get(function () {
 
 // Optimized compound indexes for common query patterns
 propertySchema.index({ status: 1, isFeatured: -1, isPriority: -1, searchPriority: -1, createdAt: -1 });
+propertySchema.index({ isFeatured: -1, isPriority: -1, searchPriority: -1, createdAt: -1 });
 propertySchema.index({ status: 1, owner_id: 1 });
 propertySchema.index({ name: 1, address: 1 }); // Optimized for search queries
 propertySchema.index({ createdAt: -1 });
